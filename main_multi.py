@@ -6,6 +6,7 @@
 """
 
 from core.tracing import setup_langfuse_tracing
+from core.tts import speak
 from agents.parent_agent import build_parent_agent
 from core.memory import LongTermMemory
 
@@ -44,6 +45,7 @@ def main():
         response = agent(augmented)
         answer = str(response)
         print(f"Agent: {answer}\n")
+        speak(answer)
 
         # 3. 今回の Q&A を長期記憶に保存
         memory.add(

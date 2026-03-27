@@ -36,3 +36,6 @@ Thumbs.db
 # ── Docker ──────────────────────────────────────
 # docker-compose.override.yml は個人環境の上書き設定のため除外
 docker-compose.override.yml
+
+# ── Web UI ──────────────────────────────────────
+sessions.json

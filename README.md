@@ -2,11 +2,12 @@
 
 [Strands Agents SDK](https://strandsagents.com/) をベースにしたマルチエージェントシステム。
 親エージェントが複数の専門子エージェントをツールとして呼び出す **Agent as a Tool** パターンを実装している。
+ElevenLabs による音声合成（TTS）と、会話履歴を管理できる Web UI を搭載。
 
 ## アーキテクチャ
 
 ```
-親エージェント (main_multi.py)
+親エージェント (parent_agent.py)
 ├── ask_car_expert      → 自動車全般の質問に回答 + pgvector 長期記憶
 └── ask_car_catalog     → カタログDB（トヨタ/ホンダ/スバル 15車種）を検索
                            ├── search_car_catalog   条件絞り込み検索
@@ -19,6 +20,8 @@
 - **長期記憶**: pgvector による意味検索（セッションをまたいで保持）
 - **プロンプト管理**: Langfuse Prompt Management（バージョン管理・UI編集）
 - **トレーシング**: Langfuse + OpenTelemetry（リクエスト・ツール呼び出しの可視化）
+- **TTS**: ElevenLabs API による音声合成・再生
+- **Web UI**: FastAPI + セッション履歴管理
 
 ## フォルダ構成
 
@@ -33,21 +36,64 @@ strands-agent/
 │   ├── config.py              # LLMプロバイダー設定・切り替えロジック
 │   ├── memory.py              # pgvector 長期記憶
 │   ├── prompts.py             # Langfuse プロンプト管理
-│   └── tracing.py             # OTEL トレーシング設定
+│   ├── sessions.py            # Web UI セッション管理（sessions.json）
+│   ├── tracing.py             # OTEL トレーシング設定
+│   └── tts.py                 # ElevenLabs TTS
 ├── db/
 │   └── setup_car_db.py        # カタログ初期データ投入（15車種）
+├── static/
+│   └── index.html             # Web UI フロントエンド
 ├── tests/
 │   ├── results/
 │   │   └── car_questions.json # テスト結果（自動生成）
 │   └── test_car_questions.py  # 自動車質問テスト（3件）
 ├── docker-compose.yml         # Langfuse + postgres-memory
-├── main.py                    # 起動: シンプルエージェント
-├── main_multi.py              # 起動: マルチエージェント
-├── pytest.ini
+├── main.py                    # CLI起動: シンプルエージェント
+├── main_multi.py              # CLI起動: マルチエージェント（TTS付き）
+├── server.py                  # Web UI サーバー（FastAPI）
+├── start_web.sh               # Web UI 起動スクリプト
 ├── requirements.txt
+├── sessions.json              # Web UIの会話履歴（自動生成）
 ├── .env.example
 └── README.md
 ```
+
+---
+
+## Web UI の起動（最速手順）
+
+### 前提条件
+- 初回セットアップ（下記 Step 1〜5）が完了していること
+- Dockerコンテナが起動していること
+
+### 起動コマンド
+
+```bash
+bash start_web.sh
+```
+
+ブラウザで `http://localhost:8000` を開く。
+
+### start_web.sh でできること
+
+| 処理 | 内容 |
+|---|---|
+| 仮想環境の自動検出・有効化 | `~/.venv/strands-agent` または `.venv` を自動検出 |
+| .env の存在確認 | なければエラーメッセージで案内 |
+| サーバー起動 | `uvicorn server:app --reload` でホットリロード有効 |
+
+### Web UI の機能
+
+| 機能 | 説明 |
+|---|---|
+| サイドバー | 過去の会話一覧（今日・昨日・先週・もっと前でグループ化） |
+| 新しいチャット | `+` ボタンで新規セッション作成 |
+| 会話履歴の復元 | セッションをクリックすると過去の会話を全件表示 |
+| セッション削除 | `×` ボタンで削除 |
+| モード切り替え | シンプル / マルチエージェント |
+| TTS | エージェントの返答をブラウザで音声再生（ElevenLabs） |
+| 自動タイトル | 最初のメッセージからタイトルを自動生成 |
+| Markdown表示 | コードブロック・表・箇条書きをレンダリング |
 
 ---
 
@@ -80,15 +126,11 @@ source ~/.venv/strands-agent/bin/activate
 docker compose up -d
 ```
 
-#### 起動確認
-
 すべてのコンテナが `Up` または `healthy` になっていることを確認する。
 
 ```bash
 docker compose ps
 ```
-
-期待する出力（STATUS 列）：
 
 | コンテナ名 | 役割 | ポート | 期待するSTATUS |
 |---|---|---|---|
@@ -100,29 +142,13 @@ docker compose ps
 | minio | S3互換ストレージ | 9090 | Up (healthy) |
 | postgres-memory | pgvector 長期記憶用DB | 5433 | Up (healthy) |
 
-起動直後は `starting` と表示される場合がある。数十秒待ってから再確認する。
-
-```bash
-# ログを確認する場合
-docker compose logs -f langfuse-web
-docker compose logs -f postgres-memory
-```
-
 ---
 
 ### Step 3. Langfuse の初期設定
 
-#### 3-1. アカウント作成
-
 1. ブラウザで `http://localhost:3000` を開く
-2. **Sign up** をクリックしてアカウントを作成する（メール・パスワードは任意）
-3. 組織名・プロジェクト名を入力して作成する
-
-#### 3-2. API キーの発行
-
-1. Langfuse UI 左メニュー **Settings** → **API Keys** を開く
-2. **Create new API key** をクリック
-3. 表示された `Public Key`（`pk-lf-...`）と `Secret Key`（`sk-lf-...`）をコピーしておく
+2. **Sign up** でアカウントを作成する
+3. **Settings** → **API Keys** → **Create new API key** でキーを発行する
 
 ---
 
@@ -136,134 +162,88 @@ cp .env.example .env
 
 ```env
 # ── LLMプロバイダー ──────────────────────────────
-LLM_PROVIDER=anthropic           # bedrock | anthropic | openai | litellm | ollama
+LLM_PROVIDER=anthropic
 LLM_MODEL_ID=claude-haiku-4-5-20251001
 
-# ── Anthropic（LLM_PROVIDER=anthropic の場合） ───
-ANTHROPIC_API_KEY=sk-ant-...     # https://console.anthropic.com でAPIキーを発行
+# ── Anthropic API ────────────────────────────────
+ANTHROPIC_API_KEY=sk-ant-...
 
-# ── Langfuse（Step 3-2 で発行したキーを設定） ────
+# ── Langfuse ─────────────────────────────────────
 LANGFUSE_ENABLED=true
 LANGFUSE_HOST=http://localhost:3000
 LANGFUSE_PUBLIC_KEY=pk-lf-...
 LANGFUSE_SECRET_KEY=sk-lf-...
 
-# ── 長期記憶DB（デフォルトのまま変更不要） ───────
+# ── 長期記憶DB ───────────────────────────────────
 MEMORY_DATABASE_URL=postgresql://postgres:postgres@localhost:5433/agent_memory
-```
 
-#### Langfuse 接続確認
-
-```bash
-python -c "
-from dotenv import load_dotenv; load_dotenv()
-import os
-from langfuse import Langfuse
-lf = Langfuse(
-    public_key=os.environ['LANGFUSE_PUBLIC_KEY'],
-    secret_key=os.environ['LANGFUSE_SECRET_KEY'],
-    host=os.getenv('LANGFUSE_HOST', 'http://localhost:3000'),
-)
-print('接続OK:', lf.auth_check())
-"
-```
-
-`接続OK: True` と表示されれば成功。
-
-#### 長期記憶DB（pgvector）接続確認
-
-```bash
-python -c "
-from dotenv import load_dotenv; load_dotenv()
-import os, psycopg2
-conn = psycopg2.connect(os.getenv('MEMORY_DATABASE_URL'))
-cur = conn.cursor()
-cur.execute('SELECT version()')
-print('接続OK:', cur.fetchone()[0][:40])
-conn.close()
-"
+# ── ElevenLabs TTS ───────────────────────────────
+TTS_ENABLED=true
+ELEVENLABS_API_KEY=...        # https://elevenlabs.io/app/settings/api-keys
+ELEVENLABS_VOICE_ID=JBFqnCBsd6RMkjVDRZzb
+ELEVENLABS_MODEL_ID=eleven_v3
+ELEVENLABS_OUTPUT_FORMAT=mp3_44100_128
+ELEVENLABS_SPEED=1.5          # 1.0=標準 / 1.5=1.5倍速 / 2.0=最大
 ```
 
 ---
 
 ### Step 5. カタログDBの初期化
 
-車種データ（トヨタ・ホンダ・スバル各5車種、計15車種）をDBに投入する。
-
 ```bash
 python db/setup_car_db.py
 ```
 
-期待する出力：
-```
-  投入: トヨタ プリウス
-  投入: トヨタ ハリアー
-  ...
-  投入: スバル WRX S4
+---
 
-✓ 15 車種のデータを投入しました。
-```
-
-#### カタログDB確認
+### Step 6. Web UI を起動する
 
 ```bash
-python -c "
-from dotenv import load_dotenv; load_dotenv()
-import os, psycopg2
-conn = psycopg2.connect(os.getenv('MEMORY_DATABASE_URL'))
-cur = conn.cursor()
-cur.execute('SELECT manufacturer, model_name FROM car_catalog ORDER BY manufacturer, model_name')
-for row in cur.fetchall():
-    print(f'  {row[0]} {row[1]}')
-conn.close()
-"
+bash start_web.sh
 ```
+
+ブラウザで `http://localhost:8000` を開く。
 
 ---
 
-### Step 6. エージェントの起動
-
-#### マルチエージェント（通常の使い方）
+### Step 7. CLI で使う場合（オプション）
 
 ```bash
+# マルチエージェント（TTS付き）
 python main_multi.py
-```
 
-```
-=== Multi-Agent (親 + 自動車専門エージェント) ===
-自動車に関する質問は自動的に専門エージェントへ委譲されます。
-終了するには 'exit' または 'quit' を入力してください。
-
-You: プリウスの燃費を教えて
-Agent: プリウス（2023年モデル）のWLTC燃費は 28.6 km/L です...
-
-You: 300万円以内で買えるSUVは？
-Agent: カタログDBを検索します...
-
-You: ハイブリッド車とEVの違いは？
-Agent: ハイブリッド車はガソリンエンジンと電気モーターを...
-```
-
-終了するには `exit` または `quit` を入力する。
-
-#### シンプルエージェント（ツールなし・汎用）
-
-```bash
+# シンプルエージェント
 python main.py
 ```
 
 ---
 
-### Step 7. Langfuse でトレースを確認
+## ElevenLabs TTS の設定
 
-1. ブラウザで `http://localhost:3000` を開く
-2. 左メニューの **Tracing** → **Traces** を開く
-3. エージェントとやり取りするたびにトレースが追加される
+| 環境変数 | 説明 | デフォルト |
+|---|---|---|
+| `TTS_ENABLED` | `false` で音声OFF | `true` |
+| `ELEVENLABS_API_KEY` | APIキー（必須） | - |
+| `ELEVENLABS_VOICE_ID` | ボイスID | `JBFqnCBsd6RMkjVDRZzb`（George） |
+| `ELEVENLABS_MODEL_ID` | モデル | `eleven_v3` |
+| `ELEVENLABS_OUTPUT_FORMAT` | 音声フォーマット | `mp3_44100_128` |
+| `ELEVENLABS_SPEED` | 話速（0.5〜2.0） | `1.0` |
 
-トレース画面で確認できる内容：
-- どのエージェントがどのツールを呼んだか
-- LLM へのリクエスト・レスポンス内容とトークン数
-- 各ステップの処理時間
+APIキーは [ElevenLabs ダッシュボード](https://elevenlabs.io/app/settings/api-keys) で取得。
+
+---
+
+## LLMプロバイダーの切り替え
+
+`.env` の `LLM_PROVIDER` を変更するだけで切り替えられる。
+
+| `LLM_PROVIDER` | 説明 | 必要な設定 |
+|---|---|---|
+| `bedrock`（デフォルト）| Amazon Bedrock | `AWS_REGION`、AWS認証情報 |
+| `anthropic` | Anthropic API | `ANTHROPIC_API_KEY` |
+| `openai` | OpenAI / OpenAI互換 | `OPENAI_API_KEY`、`OPENAI_BASE_URL`（任意） |
+| `litellm` | 任意のOpenAI互換サーバー | `LLM_API_BASE`、`LLM_API_KEY` |
+| `ollama` | ローカルOllama | `OLLAMA_HOST`、`OLLAMA_MODEL` |
 
 ---
 
@@ -280,21 +260,7 @@ python main.py
 
 **編集手順：** Langfuse UI → **Prompt Management** → プロンプト名を選択 → 編集 → `production` ラベルで保存
 
-次回のエージェント起動時に新しいプロンプトが自動的に反映される。Langfuse が未接続の場合はコード内のデフォルト値にフォールバックする。
-
----
-
-## LLMの設定
-
-`.env` の `LLM_PROVIDER` を変更するだけでプロバイダーを切り替えられる。
-
-| `LLM_PROVIDER` | 説明 | 必要な設定 |
-|---|---|---|
-| `bedrock`（デフォルト）| Amazon Bedrock | `AWS_REGION`、AWS認証情報 |
-| `anthropic` | Anthropic API | `ANTHROPIC_API_KEY` |
-| `openai` | OpenAI / OpenAI互換エンドポイント | `OPENAI_API_KEY`、`OPENAI_BASE_URL`（任意） |
-| `litellm` | 任意のOpenAI互換サーバー（vLLM、LM Studio等） | `LLM_API_BASE`、`LLM_API_KEY` |
-| `ollama` | ローカルOllamaサーバー | `OLLAMA_HOST`、`OLLAMA_MODEL` |
+Langfuse が未接続の場合は `core/prompts.py` 内のデフォルト値にフォールバックする。
 
 ---
 
@@ -305,21 +271,6 @@ python -m pytest tests/ -v
 ```
 
 - テスト結果（Q&A）: `tests/results/car_questions.json`
-- HTMLレポート: `/tmp/strands-test-results/report.html`
-- JUnit XML: `/tmp/strands-test-results/junit.xml`
-
----
-
-## 長期記憶について
-
-- **実装**: pgvector（PostgreSQL拡張）
-- **埋め込みモデル**: `all-MiniLM-L6-v2`（384次元、ローカル実行・APIキー不要）
-- **インデックス**: HNSW（コサイン類似度）
-- **保存対象**: 各 Q&A のペア（質問 + 回答先頭200文字）
-- **検索**: 意味的類似度 Top-3 を取得してプロンプトに付加
-
-`car-agent` と `parent-agent` がそれぞれ独立した長期記憶を持つ。
-セッションをまたいで過去の会話を参照できるため、繰り返し使うほど文脈を踏まえた回答になる。
 
 ---
 
@@ -327,17 +278,25 @@ python -m pytest tests/ -v
 
 **Docker コンテナが起動しない**
 ```bash
-docker compose down -v   # ボリュームごと削除してリセット
+docker compose down -v
 docker compose up -d
 ```
 
 **`vector type not found` エラー**
-postgres-memory コンテナが `healthy` になる前に接続している可能性がある。
-`docker compose ps` でステータスを確認してから再実行する。
+`postgres-memory` コンテナが `healthy` になる前に接続している。`docker compose ps` でステータスを確認してから再実行する。
 
 **`credit balance too low` エラー**
 Anthropic API の残高不足。`https://console.anthropic.com` でクレジットを追加する。
 
 **Langfuse にトレースが届かない**
 `.env` の `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` を確認する。
-Step 4 の接続確認コマンドで `True` が返るか試す。
+
+**音声が再生されない（Web UI）**
+ブラウザの自動再生ポリシーによりブロックされる場合がある。ページを一度クリックしてからメッセージを送ると再生される。
+
+**start_web.sh で仮想環境が見つからないと言われる**
+```bash
+python3 -m venv ~/.venv/strands-agent
+source ~/.venv/strands-agent/bin/activate
+pip install -r requirements.txt
+```

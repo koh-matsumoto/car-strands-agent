@@ -4,6 +4,7 @@
 """
 
 from core.tracing import setup_langfuse_tracing
+from core.tts import speak
 from agents.agent import build_agent
 
 
@@ -28,7 +29,9 @@ def main():
             break
 
         response = agent(user_input)
-        print(f"Agent: {response}\n")
+        response_text = str(response)
+        print(f"Agent: {response_text}\n")
+        speak(response_text)
 
 
 if __name__ == "__main__":
