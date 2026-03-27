@@ -1,0 +1,38 @@
+# ── 機密情報 ────────────────────────────────────
+.env
+*.key
+*.pem
+*.p12
+*.pfx
+
+# ── Python ──────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ── 仮想環境 ─────────────────────────────────────
+.venv/
+venv/
+env/
+
+# ── pytest / テスト成果物 ────────────────────────
+.pytest_cache/
+/tmp/strands-test-results/
+
+# ── エディタ・OS ─────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ── Docker ──────────────────────────────────────
+# docker-compose.override.yml は個人環境の上書き設定のため除外
+docker-compose.override.yml
